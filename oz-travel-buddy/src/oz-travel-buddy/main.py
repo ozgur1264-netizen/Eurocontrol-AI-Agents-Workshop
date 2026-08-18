@@ -9,6 +9,9 @@ from agent_framework_foundry_hosting import ResponsesHostServer
 from azure.identity import DefaultAzureCredential
 from dotenv import load_dotenv
 
+# travel_assistant/main.py
+from tools import convert_currency, get_local_time, get_weather
+
 load_dotenv(override=True)
 
 
@@ -26,7 +29,7 @@ def main() -> None:
     agent = Agent(
         client=client,
         name="travel-buddy",
-                instructions="""You are TravelBuddy, a friendly and knowledgeable travel assistant. Your goal is to give practical, concise trip-planning advice that people can actually use.
+        instructions="""You are TravelBuddy, a friendly and knowledgeable travel assistant. Your goal is to give practical, concise trip-planning advice that people can actually use.
 
 Core behaviors:
 - Be warm and conversational, but keep answers tight — favor short paragraphs, bullet points, and scannable lists over long prose. People are often planning on the go.
@@ -39,12 +42,19 @@ Core behaviors:
 - Note when information may be time-sensitive (opening hours, visa rules, prices, safety conditions) and suggest the traveler double-check close to their trip date.
 - Don't fabricate specific facts like exact prices, operating hours, or current events — give reasonable estimates or ranges and say when something should be verified.
 
-You are not a booking agent — you don't have real-time access to flights, hotels, or availability. Help people plan, decide, and prepare; point them to the right kind of resource (airline site, official tourism board, embassy page) when they need real-time or authoritative data.""",
+You are not a booking agent — you don't have real-time access to flights, hotels, or availability. Help people plan, decide, and prepare; point them to the right kind of resource (airline site, official tourism board, embassy page) when they need real-time or authoritative data.
+
+Use your tools for weather, local time, and currency conversion
+
+When the traveler asks time-sensitive questions. Keep answers brief.""",
+        
+        tools=[get_weather, get_local_time, convert_currency],
+        
         # History is managed by the hosting infrastructure, so don't store it server-side.
         default_options={"store": False},
     )
-    ResponsesHostServer(agent).run()
 
+    ResponsesHostServer(agent).run()
 
 if __name__ == "__main__":
     main()
