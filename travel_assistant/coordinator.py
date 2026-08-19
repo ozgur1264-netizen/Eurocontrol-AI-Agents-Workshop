@@ -1,27 +1,4 @@
-"""TravelBuddy multi-agent Coordinator — build the group chat.
-
-Everything you already wrote in earlier steps is carried over for you: the
-instruction constants (translated from the ``agents/<name>/`` slices), the Step 5
-RAG provider, the Step 6 trusted script runner and skills provider, the manager
-``Coordinator``, and the ``GroupChatBuilder`` graph.
-
-**Your job is the one TODO below: complete the specialist block.** ``FlightsSpecialist``
-is written for you as the worked example — add ``HotelsSpecialist`` and
-``ActivitiesSpecialist`` the same way, by reading each ``agents/<name>/`` slice pair
-(``agent.yaml`` for the role, ``agent.manifest.yaml`` for the capabilities) and
-translating it into an ``Agent(...)``.
-That capability slicing is what this step teaches. Follow Step 7 in the root
-``README.md``.
-
-The per-specialist ``agents/<name>/agent.yaml`` + ``agent.manifest.yaml`` slices
-*describe* each specialist's role and capability boundary, but nothing loads them
-at runtime — **this file is the executable source of truth**, so keep the two in
-sync: the slice is the reviewable contract, this file is what runs.
-
-Stuck? The complete, runnable version lives at
-.workshop/solutions/07-multi-agent/travel_assistant/coordinator.py.
-"""
-
+# travel_assistant/coordinator.py
 import asyncio
 import io
 import os
@@ -271,10 +248,6 @@ async def _download_foundry_skills(endpoint: str, names: list[str]) -> None:
 def _build_skills_provider() -> TrustedSkillsProvider:
     """Download the required Foundry skill(s), then serve them and the local skill from ONE provider.
 
-    Carried from your Step 6 ``main.py`` (the Foundry-enabled version). Skipped the
-    Foundry skill in Step 6? Replace this body with your local-only provider and drop
-    the response-guardrails line from ``ACTIVITIES_INSTRUCTIONS`` above.
-
     The local travel-guide skill needs the trusted ``run_local_skill_script`` runner to
     execute create_travel_guide.py. Both folders share one ``from_paths`` so their skill
     tools never collide, but a ``script_filter`` arms the runner for local skills only, so a
@@ -332,21 +305,7 @@ def build_travel_coordinator() -> Agent:
         default_options={"store": False},
     )
 
-    # ------------------------------------------------------------------
-    # TODO (the exercise): complete the specialist block — Flights is done,
-    # add Hotels and Activities.
-    #
-    # Read each agents/<name>/agent.yaml + agent.manifest.yaml slice and translate
-    # it into an Agent(...) below:
-    #   - `name:`        -> name=...            (the manager routes by name)
-    #   - `description:` -> description=...     (feeds the manager's routing prompt)
-    #   - `instructions:`-> instructions=<the matching constant above>
-    #   - `tools:`       -> tools=[...]         (function tools + `toolbox`)
-    #   - `rag:`         -> context_providers=[search]
-    #   - `skills:`      -> context_providers=[search, skills]   (Activities only)
-    # Give every specialist default_options={"store": False}, exactly as in Steps 1-6.
-    #
-    # The worked example — Flights, from agents/flights/:
+    # Flights: weather + local time + currency, plus the toolbox (OctoTrip MCP is flight search).
     flights = Agent(
         client=client,
         name="FlightsSpecialist",
@@ -356,14 +315,28 @@ def build_travel_coordinator() -> Agent:
         default_options={"store": False},
     )
 
-    # Now do the same for the other two, from agents/hotels/ and agents/activities/:
-    #   hotels     -> currency + toolbox (web search), grounded by the destinations index.
-    #   activities -> toolbox (web search), grounded by the destinations index, AND the
-    #                 skills provider, so this participant owns the travel-guide PDF and
-    #                 the response-guardrails check.
-    # hotels = Agent(...)
-    # activities = Agent(...)
-    # ------------------------------------------------------------------
+    # Hotels: currency + web search (toolbox) + grounded destination knowledge (RAG).
+    hotels = Agent(
+        client=client,
+        name="HotelsSpecialist",
+        description="Handles hotel area, budget, amenity, and lodging trade-off questions.",
+        instructions=HOTELS_INSTRUCTIONS,
+        tools=[convert_currency, toolbox],
+        context_providers=[search],
+        default_options={"store": False},
+    )
+
+    # Activities: toolbox (web/reference) + grounded destination knowledge (RAG) +
+    # the skills provider, so this participant owns the travel-guide PDF and response-guardrails.
+    activities = Agent(
+        client=client,
+        name="ActivitiesSpecialist",
+        description="Handles experiences, day trips, local guidance, and itinerary-building questions.",
+        instructions=ACTIVITIES_INSTRUCTIONS,
+        tools=[toolbox],
+        context_providers=[search, skills],
+        default_options={"store": False},
+    )
 
     # GroupChatBuilder wires a manager (orchestrator_agent) to each participant with
     # bidirectional edges: every round the Coordinator picks the next specialist or
