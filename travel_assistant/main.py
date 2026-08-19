@@ -1,13 +1,14 @@
 # travel_assistant/main.py
 from agent_framework_foundry_hosting import ResponsesHostServer
 
-from coordinator import build_travel_coordinator
+from workflow import build_workflow_agent
 
 
 def main() -> None:
-    # The Coordinator + specialists group chat is exposed as a single agent, so the
-    # rest of the hosting stack is unchanged from earlier steps.
-    agent = build_travel_coordinator()
+    # The durable workflow (gather -> specialists -> consolidate -> finalize) is
+    # exposed as a single agent via `.as_agent()`, so hosting is unchanged from the
+    # earlier steps. Set require_approval=True to insert the human approval gate.
+    agent = build_workflow_agent(require_approval=False)
     ResponsesHostServer(agent).run()
 
 
