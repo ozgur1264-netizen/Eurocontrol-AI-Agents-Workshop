@@ -9,5 +9,7 @@ debugpy
 agent-framework-azure-ai-search
 azure-search-documents
 
-# ---- Foundry skills (upload + runtime download) ----
+# ---- Memory (Foundry Memory Store) + Foundry skills ----
+# azure-ai-projects powers both the Memory Store and the Foundry Skills API
+# (upload via foundry_skills/provision_skills.py + runtime download).
 azure-ai-projects

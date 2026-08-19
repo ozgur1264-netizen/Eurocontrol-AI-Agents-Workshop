@@ -19,7 +19,7 @@ from agent_framework import (
     SkillsProvider,
 )
 from agent_framework.azure import AzureAISearchContextProvider
-from agent_framework.foundry import FoundryChatClient
+from agent_framework.foundry import FoundryChatClient, FoundryMemoryProvider
 from agent_framework_foundry_hosting import FoundryToolbox
 from azure.ai.projects.aio import AIProjectClient
 from azure.identity import DefaultAzureCredential
@@ -241,29 +241,54 @@ def _build_skills_provider() -> TrustedSkillsProvider:
     )
 
 
+def _build_memory_provider(client: FoundryChatClient) -> FoundryMemoryProvider:
+    """Give each specialist durable, per-user memory backed by a Foundry Memory Store.
+
+    We reuse the ``AIProjectClient`` the FoundryChatClient already created (via
+    ``client.project_client``) so the memory provider shares the same auth context.
+    ``scope="{{$userId}}"`` is a hosting placeholder the runtime replaces with the
+    caller's user id, so each traveler gets their own isolated memories.
+    """
+    memory_store_name = os.environ["MEMORY_STORE_NAME"]
+    return FoundryMemoryProvider(
+        project_client=client.project_client,
+        memory_store_name=memory_store_name,
+        scope="{{$userId}}",
+        # Extract and store memories immediately so the workshop's teach-then-recall
+        # flow works in one session. The default is 300s (5 min); in production keep
+        # the delay to batch updates and reduce cost.
+        update_delay=0,
+    )
+
+
 def make_client(credential=None) -> FoundryChatClient:
     """Create the shared Foundry chat client used by every specialist."""
     return FoundryChatClient(
         project_endpoint=os.environ["AZURE_AI_PROJECT_ENDPOINT"],
         model=os.environ["AZURE_AI_MODEL_DEPLOYMENT_NAME"],
         credential=credential or DefaultAzureCredential(),
+        # Required so client.project_client can call the preview beta.memory_stores
+        # API that FoundryMemoryProvider depends on.
+        allow_preview=True,
     )
 
 
 # --- Specialist factories -------------------------------------------------
-# One source of truth: the workflow (workflow.py) builds its agent nodes from
-# these factories.
+# One source of truth: the durable workflow (workflow.py) builds its agent nodes
+# from these factories.
 
 
 def create_flights_agent(client: FoundryChatClient, credential=None) -> Agent:
     """Flights: weather + local time + currency, plus the toolbox (OctoTrip MCP is flight search)."""
     credential = credential or DefaultAzureCredential()
     toolbox = FoundryToolbox(credential)
+    memory = _build_memory_provider(client)
     return Agent(
         client=client,
         name="FlightsSpecialist",
         instructions=FLIGHTS_INSTRUCTIONS,
         tools=[get_weather, get_local_time, convert_currency, toolbox],
+        context_providers=[memory],
         default_options={"store": False},
     )
 
@@ -273,12 +298,13 @@ def create_hotels_agent(client: FoundryChatClient, credential=None) -> Agent:
     credential = credential or DefaultAzureCredential()
     toolbox = FoundryToolbox(credential)
     search = _build_search_provider(credential)
+    memory = _build_memory_provider(client)
     return Agent(
         client=client,
         name="HotelsSpecialist",
         instructions=HOTELS_INSTRUCTIONS,
         tools=[convert_currency, toolbox],
-        context_providers=[search],
+        context_providers=[search, memory],
         default_options={"store": False},
     )
 
@@ -288,11 +314,12 @@ def create_activities_agent(client: FoundryChatClient, credential=None) -> Agent
     credential = credential or DefaultAzureCredential()
     toolbox = FoundryToolbox(credential)
     search = _build_search_provider(credential)
+    memory = _build_memory_provider(client)
     return Agent(
         client=client,
         name="ActivitiesSpecialist",
         instructions=ACTIVITIES_INSTRUCTIONS,
         tools=[toolbox],
-        context_providers=[search],
+        context_providers=[search, memory],
         default_options={"store": False},
     )
