@@ -2,10 +2,10 @@
 
 Built on the upstream [foundry-samples](https://github.com/microsoft-foundry/foundry-samples/tree/main/samples/python/hosted-agents/agent-framework/responses).
 
-> **Progress:** Step `08` of `9` — **Workflow (experimental)**  
-> ▰▰▰▰▰▰▰▰▱▱
+> **Progress:** Step `09` of `9` — **Memory (experimental)**  
+> ▰▰▰▰▰▰▰▰▰▰
 
-<!-- step: 08 -->
+<!-- step: 09 -->
 
 <details>
 <summary>Workshop map</summary>
@@ -18,8 +18,8 @@ Built on the upstream [foundry-samples](https://github.com/microsoft-foundry/fou
 - Step 05 — RAG (Azure AI Search) ✅
 - Step 06 — Skills ✅
 - Step 07 — Multi-agent ✅
-- **Step 08 — Workflow (experimental)**
-- Step 09 — Memory (experimental)
+- Step 08 — Workflow (experimental) ✅
+- **Step 09 — Memory (experimental)**
 - Step 99 — Cleanup
 
 </details>
@@ -27,241 +27,176 @@ Built on the upstream [foundry-samples](https://github.com/microsoft-foundry/fou
 If something looks broken see [Troubleshooting](.workshop/docs/steps/00-intro.md#troubleshooting).
 
 
-# Step 8 — Durable orchestration with workflows
+# Step 9 — Durable per-user memory
 
 > 🧪 **Experimental** — this step has not been fully tested yet. Treat it as a preview and expect rough edges.
 
-> **Goal:** re-express Step 7's trip planning as an Agent Framework **workflow** — a fixed graph that is observable, restart-safe via checkpoints, and can pause for human approval — while reusing the exact same specialists.
+> **Goal:** give TravelBuddy a persistent, per-user memory backed by a Foundry **Memory Store**, so it recalls stable traveler preferences across separate conversations — while keeping the whole Step 8 workflow intact.
 
 ## What you'll learn
 
-- The workflow graph model: **executors**, **edges**, **supersteps**, and fan-out / fan-in
-- How **checkpoints** make a long-running plan restart-safe (`FileCheckpointStorage`)
-- How to expose a whole workflow as one hosted agent with `workflow.as_agent()` — so deployment is unchanged
-- How a **human approval gate** works with `ctx.request_info()` + `@response_handler`, and how it surfaces when the workflow is hosted
+- What a Foundry **Memory Store** is, and how it differs from chat history and from RAG
+- How `FoundryMemoryProvider` extracts durable facts and injects relevant memories into agent context
+- How memory is **scoped per user** with the `{{$userId}}` hosting placeholder
+- How to add memory as one more `context_provider` without touching the workflow graph
 
 ## What's already in the repo
 
-- Everything from Steps 1–7 in `travel_assistant/` — the specialists, tools, toolbox, RAG, and skill.
-- `travel_assistant/coordinator.py` — the Step 7 group chat. In this step you extract the specialist constructors into reusable factories so the workflow builds the **same** agents.
+- Everything from Steps 1–8 in `travel_assistant/` — the durable workflow, specialists, tools, toolbox, RAG, and skill.
+- `travel_assistant/coordinator.py` — the Step 8 specialist factories (`make_client`, `create_flights_agent`, `create_hotels_agent`, `create_activities_agent`). This step adds memory there so every specialist gains it from one place.
 - `travel_toolbox/toolbox.yaml` — unchanged.
 
-This step adds a `workflow.py`, refactors `coordinator.py` to expose factories, repoints `main.py`, and adds a `Workflows` tag. There are **no** new environment variables and no new Azure resources.
+This step adds `provision_memory_store.py`, a small delta on `coordinator.py`, two new environment variables, and a `Memory` tag. `main.py` and `workflow.py` are **unchanged**, and there are **no** new Azure resources in the manifest.
 
 ## Concept (5-min read)
 
-Step 7 was **runtime collaboration**: the Coordinator decided, turn by turn, which specialist should answer next. That's the right shape when the path is user-driven and unknown in advance.
+A conversation already has **in-conversation context** — the messages still in the current chat history. That is enough for follow-up questions, but it is not durable: when the conversation ends or history is trimmed, it is gone. **Memory** is the durable layer. TravelBuddy writes stable facts about *you* — home airport, cabin class, budget band, dietary needs, favourite destinations — into a Foundry **Memory Store**, and on a later conversation the memory provider retrieves the relevant ones and injects them into the model context before the agent answers.
 
-A **workflow** is the opposite trade-off. You choose it when the process has a **known shape**, must survive restarts, or needs an explicit review before a costly action. Trip planning fits perfectly: gather preferences → ask each specialist → consolidate a draft → (optionally) get approval → finalize. The graph makes that process repeatable and inspectable, at the cost of the conversational flexibility the group chat gave you.
+**Memory is not RAG.** RAG (Step 5) retrieves knowledge about the *world* — destination documents shared by everyone. Memory retrieves personal facts about the *current user*. In this workshop the destination index says what TravelBuddy knows about *places*; the memory store says what TravelBuddy knows about *you*.
 
-**The graph model.** A workflow is built from **executors** (nodes) connected by **edges**. Executors can be `AgentExecutor` (an agent wrapped as a node) or your own `Executor` subclasses with `@handler` methods. The engine runs in **supersteps**: every executor ready at the start of a superstep runs, their messages are delivered, and the next superstep begins. Fanning three edges out of one node runs those branches **concurrently**; fanning several edges into one node lets it aggregate.
+**How it works.** `FoundryMemoryProvider` is a `context_provider`, exactly like `AzureAISearchContextProvider` (RAG) and `SkillsProvider` (skills). On each turn it does two things: it **retrieves** memories relevant to the request and adds them to context, and it **extracts** new durable facts from the exchange and writes them to the store. The extraction/consolidation is handled server-side by the memory store using the chat and embedding models you configure when you provision it — that is why an **embedding model deployment** is a prerequisite.
 
-**Checkpoints.** When a `checkpoint_storage` is supplied, the engine writes a checkpoint at the end of each superstep, capturing executor state, pending messages, and pending requests. If the process dies, or the user says "replan with a lower budget," you can resume from a checkpoint instead of redoing completed work. Your executors persist their own local state by overriding `on_checkpoint_save` / `on_checkpoint_restore`.
+**Scope is the key design detail.** Memories are partitioned by a scope string. Store under one scope and read under another and recall silently fails. For a hosted agent the correct scope is the special placeholder `scope="{{$userId}}"`, which the hosting runtime replaces with the authenticated caller's user id — so every traveler automatically gets their own isolated memories. (In a purely local script you would instead pass a stable id you control.)
 
-**Human-in-the-loop.** An executor calls `ctx.request_info(request_data=..., response_type=...)` to pause and ask an outside party a question; a `@response_handler` method resumes the graph when the answer arrives. Locally you drive this with a streaming loop that feeds `responses=` back into `workflow.run(...)`. When the workflow is **hosted as an agent**, the same request is surfaced to the caller as a **function call** — so the pattern still works over the Responses protocol, it just arrives as a tool call rather than a plain prompt.
-
-**Hosting.** `workflow.as_agent()` wraps the whole graph as a single agent, validated so its start executor accepts the input, with a session managing conversation state. That means hosting and deployment are identical to every earlier step: one agent, `ResponsesHostServer`, `resources: []`. As in Step 7, all the executors run **in-process** inside that one hosted agent — the same in-process vs. remote-A2A trade-off applies if you ever need a step owned or scaled independently.
+**Where memory attaches.** We add the provider inside the Step 8 specialist factories, so the workflow's `flights` / `hotels` / `activities` executors all become memory-aware. The `finalize_itinerary` step is deliberately left out: the specialists already fold each traveler's recalled preferences into the draft, so finalize only has to render and guardrail the consolidated answer — it needs the skills, not per-user recall. The graph, checkpoints, hosting, and `workflow.as_agent()` are untouched — memory rides along as context.
 
 ```mermaid
 flowchart LR
-    start((start)) --> gather[gather_preferences]
-    gather --> flights[flights]
-    gather --> hotels[hotels]
-    gather --> activities[activities]
-    flights --> consolidate[[consolidate 💾 checkpoint]]
-    hotels --> consolidate
-    activities --> consolidate
-    consolidate --> finalize[finalize_itinerary]
-    finalize --> finish((end))
+    A[Conversation] --> B[Specialist turn]
+    B --> C[Extract durable facts]
+    C --> D[(Foundry Memory Store)]
+    D -.recall.-> E[Later conversation]
+    E --> F[Inject user-scoped memories]
+    F --> G[Personalized itinerary]
 ```
-
-The doubled `consolidate` node is where the checkpoint is written — the safe resume point. The dashed approval gate (below) slots between `consolidate` and `finalize` when you enable it.
 
 **Learn more**
 
-- [Agent Framework workflows overview](https://learn.microsoft.com/agent-framework/workflows/)
-- [Checkpoints](https://learn.microsoft.com/agent-framework/workflows/checkpoints)
-- [Human-in-the-loop](https://learn.microsoft.com/agent-framework/workflows/human-in-the-loop)
-- [Agent executor & context modes](https://learn.microsoft.com/agent-framework/workflows/advanced/agent-executor)
+- [What is memory in Foundry Agents](https://learn.microsoft.com/azure/foundry/agents/concepts/what-is-memory)
+- [Use memory with agents](https://learn.microsoft.com/azure/foundry/agents/how-to/memory-usage)
+- [Quickstart: memory for a hosted agent](https://learn.microsoft.com/azure/foundry/agents/quickstarts/quickstart-memory-hosted-agent)
+- [Agent Framework — get started with memory](https://learn.microsoft.com/agent-framework/get-started/memory)
 
 ## Steps
 
-### 1. Extract the specialist factories
+### 1. Provision the memory store (out of band)
 
-Step 7 built the specialists inline inside `build_travel_coordinator()`. Extract that construction into factories and a shared client helper, then delete `build_travel_coordinator()`: Step 8 replaces the Step 7 group chat with the durable **workflow**, which builds the **same** agents from these factories. The factories are now the single source of truth the workflow reads.
+A memory store is a Foundry primitive, not an Azure resource you declare in the manifest — so you create it once with a helper script, the same way you provisioned the Search index in Step 5. Create `travel_assistant/provision_memory_store.py`. It reads your `.env`, creates the store named by `MEMORY_STORE_NAME` if it does not already exist, and is safe to re-run.
 
-As in Step 7, the `agents/*/agent.yaml` slices remain **documentation** — nothing loads them at runtime. The workflow imports these Python factories, so `coordinator.py` stays the single executable source of truth for what each specialist is and may touch.
+```python
+# travel_assistant/provision_memory_store.py
+from azure.ai.projects.aio import AIProjectClient
+from azure.ai.projects.models import MemoryStoreDefaultDefinition, MemoryStoreDefaultOptions
+from azure.core.exceptions import ResourceNotFoundError
+from azure.identity.aio import DefaultAzureCredential
+
+async def main() -> None:
+    endpoint = required_env("AZURE_AI_PROJECT_ENDPOINT")
+    memory_store_name = required_env("MEMORY_STORE_NAME")
+    chat_model = required_env("AZURE_AI_MODEL_DEPLOYMENT_NAME")
+    embedding_model = required_env("AZURE_AI_EMBEDDING_MODEL_DEPLOYMENT_NAME")
+
+    async with (
+        DefaultAzureCredential() as credential,
+        AIProjectClient(endpoint=endpoint, credential=credential, allow_preview=True) as project,
+    ):
+        try:
+            existing = await project.beta.memory_stores.get(name=memory_store_name)
+            print(f"Memory store '{existing.name}' already exists; leaving as-is.")
+            return
+        except ResourceNotFoundError:
+            pass
+        definition = MemoryStoreDefaultDefinition(
+            chat_model=chat_model,
+            embedding_model=embedding_model,
+            options=MemoryStoreDefaultOptions(
+                chat_summary_enabled=False,
+                user_profile_enabled=True,
+                user_profile_details="Capture durable travel preferences; avoid sensitive data.",
+            ),
+        )
+        await project.beta.memory_stores.create(name=memory_store_name, definition=definition,
+            description="Memory store for TravelBuddy")
+```
+
+The store needs two model deployments: your existing **chat** model and an **embedding** model (used to index memories for semantic recall). `user_profile_enabled=True` turns on durable per-user facts; `chat_summary_enabled=False` keeps the demo focused on preferences. The `memory_stores` API is preview, so the client is created with `allow_preview=True`.
+
+Run it from the solution's `travel_assistant/` directory, after loading `.env`:
+
+<!-- terminal -->
+```bash
+python provision_memory_store.py
+```
+
+First run creates and verifies the store; re-runs report it already exists.
+
+### 2. Add memory to the specialist factories
+
+Two small changes let every specialist share one memory provider. First, `make_client` opts into the preview API so the underlying project client can reach `beta.memory_stores`:
 
 ```python
 # travel_assistant/coordinator.py (delta)
+from agent_framework.foundry import FoundryChatClient, FoundryMemoryProvider  # add FoundryMemoryProvider
+
 def make_client(credential=None) -> FoundryChatClient:
     return FoundryChatClient(
         project_endpoint=os.environ["AZURE_AI_PROJECT_ENDPOINT"],
         model=os.environ["AZURE_AI_MODEL_DEPLOYMENT_NAME"],
         credential=credential or DefaultAzureCredential(),
+        allow_preview=True,  # NEW: needed for client.project_client -> beta.memory_stores
     )
+```
 
+Then add a builder that reuses the chat client's `project_client`, and append it to each specialist's `context_providers`:
 
-def create_flights_agent(client, credential=None) -> Agent:
+```python
+# travel_assistant/coordinator.py (delta)
+def _build_memory_provider(client: FoundryChatClient) -> FoundryMemoryProvider:
+    memory_store_name = os.environ["MEMORY_STORE_NAME"]
+    return FoundryMemoryProvider(
+        project_client=client.project_client,
+        memory_store_name=memory_store_name,
+        scope="{{$userId}}",  # hosting replaces this with the caller's user id
+        update_delay=0,        # write memories immediately (default is 300s / 5 min)
+    )
+```
+
+`update_delay` is the debounce before the store extracts and persists new facts. It **defaults to 300 seconds (5 minutes)**, which batches writes to reduce cost in production. For the workshop we set `update_delay=0` so a fact you state in one turn is recallable on the next; leave the default (or raise it) in a real deployment.
+
+Each factory builds the provider from its `client` and appends it — keeping every carried-over tool, toolbox, and RAG:
+
+```python
+# travel_assistant/coordinator.py (delta)
+def create_hotels_agent(client, credential=None) -> Agent:
     credential = credential or DefaultAzureCredential()
     toolbox = FoundryToolbox(credential)
+    search = _build_search_provider(credential)
+    memory = _build_memory_provider(client)                       # NEW
     return Agent(
-        client=client, name="FlightsSpecialist",
-        instructions=FLIGHTS_INSTRUCTIONS,
-        tools=[get_weather, get_local_time, convert_currency, toolbox], default_options={"store": False},
+        client=client, name="HotelsSpecialist", instructions=HOTELS_INSTRUCTIONS,
+        tools=[convert_currency, toolbox],
+        context_providers=[search, memory],  # + memory
+        default_options={"store": False},
     )
-
-# create_hotels_agent (currency + toolbox web + RAG) and
-# create_activities_agent (toolbox web + RAG) follow the same pattern.
 ```
 
-The point is a **single source of truth**: the workflow builds every specialist from these factories.
+`create_flights_agent` gains `context_providers=[memory]` (its first provider); `create_activities_agent` becomes `[search, memory]`. Reading `MEMORY_STORE_NAME` with `os.environ["..."]` makes memory a required capability — a missing value fails fast with a clear `KeyError` instead of silently starting without recall.
 
-### 2. Create `travel_assistant/workflow.py`
+Reusing `client.project_client` (instead of constructing a second `AIProjectClient`) keeps a single authentication context, and putting memory in the factories means the runtime Coordinator (Step 7) and the hosted workflow (Step 8) both pick it up from one source of truth. `main.py` and `workflow.py` need **no** changes.
 
-The workflow has three custom executors plus agent nodes. `GatherPreferences` fans the request out to all three specialists; `Consolidate` aggregates their answers, checkpoints the draft, then sends the finalize prompt; `finalize_itinerary` is an `AgentExecutor` that writes the plan and owns the final deliverable, using the `travel-guide` skill to render the shareable PDF and the `response-guardrails` skill to check the answer. This is the payoff over Step 7: there the group chat Coordinator was the manager: every round it returned a structured routing decision rather than a free, tool-driven answer, so a deliverable-shaping skill didn't belong on it — the skills had to ride on the Activities leaf and only guarded that leaf's output. A dedicated `finalize` node owns the deliverable outright and guards the actual final answer.
+### 3. Declare the new configuration
 
-```python
-# travel_assistant/workflow.py
-from agent_framework import (
-    Agent, AgentExecutor, AgentExecutorRequest, AgentExecutorResponse,
-    Executor, FileCheckpointStorage, Message, WorkflowBuilder, WorkflowContext,
-    handler, response_handler,
-)
+Add the two new variables so local tooling and the hosted container both receive them. In `agent.yaml`, append to `environment_variables`:
 
-from coordinator import (
-    _build_skills_provider,
-    create_activities_agent, create_flights_agent, create_hotels_agent, make_client,
-)
-
-
-class GatherPreferences(Executor):
-    def __init__(self) -> None:
-        super().__init__(id="gather_preferences")
-
-    @handler
-    async def gather(self, request: str, ctx: WorkflowContext[AgentExecutorRequest]) -> None:
-        base = f"The user is planning a trip.\n\nUser request:\n{request}"
-        for target_id, focus in {
-            "flights": "Recommend flight approach, timing, and trade-offs.",
-            "hotels": "Recommend neighbourhoods, hotel style, and budget split.",
-            "activities": "Recommend a balanced day-by-day activity plan.",
-        }.items():
-            await ctx.send_message(
-                AgentExecutorRequest(
-                    messages=[Message(role="user", contents=[f"{base}\n\nFocus: {focus}"])],
-                    should_respond=True,
-                ),
-                target_id=target_id,
-            )
+```yaml
+# travel_assistant/agent.yaml (delta)
+  - name: AZURE_AI_EMBEDDING_MODEL_DEPLOYMENT_NAME
+    value: ${AZURE_AI_EMBEDDING_MODEL_DEPLOYMENT_NAME}
+  - name: MEMORY_STORE_NAME
+    value: ${MEMORY_STORE_NAME}
 ```
 
-`Consolidate` waits until all three specialist responses have arrived (it's invoked once per incoming edge), builds the draft, and persists node-local state for safe resume:
-
-```python
-# travel_assistant/workflow.py
-class Consolidate(Executor):
-    def __init__(self, approval_target: str | None = None) -> None:
-        super().__init__(id="consolidate")
-        self._approval_target = approval_target
-        self._draft: DraftPlan | None = None
-
-    @handler
-    async def collect(self, response: AgentExecutorResponse, ctx: WorkflowContext[AgentExecutorRequest]) -> None:
-        draft = ctx.get_state("draft_plan", DraftPlan(session_id=ctx.get_state("session_id", "local-user")))
-        setattr(draft, response.executor_id, response.agent_response.text)  # flights/hotels/activities
-        ctx.set_state("draft_plan", draft)
-        self._draft = draft
-        if not (draft.flights and draft.hotels and draft.activities):
-            return  # still waiting for the other branches
-        consolidated = f"## Flights\n{draft.flights}\n\n## Hotels\n{draft.hotels}\n\n## Activities\n{draft.activities}\n"
-        await ctx.send_message(
-            AgentExecutorRequest(
-                messages=[Message(role="user", contents=[_finalize_prompt(consolidated)])],
-                should_respond=True,
-            ),
-            target_id="finalize_itinerary",
-        )
-
-    async def on_checkpoint_save(self) -> dict[str, Any]:
-        return {"draft": self._draft.__dict__ if self._draft else None}
-
-    async def on_checkpoint_restore(self, state: dict[str, Any]) -> None:
-        data = state.get("draft")
-        self._draft = DraftPlan(**data) if data else None
-```
-
-Build the graph, enable checkpointing, and expose it as an agent. `context_mode="last_agent"` keeps each specialist focused on its own slice instead of the whole transcript. `FileCheckpointStorage` deserializes checkpoints with a restricted unpickler, so the `DraftPlan` and `ApprovalRequest` dataclasses we persist must be allow-listed by their `"module:qualname"` — otherwise a resume raises on restore:
-
-```python
-# travel_assistant/workflow.py
-def build_workflow(require_approval: bool = False):
-    client = make_client()
-    flights = AgentExecutor(create_flights_agent(client), id="flights", context_mode="last_agent")
-    hotels = AgentExecutor(create_hotels_agent(client), id="hotels", context_mode="last_agent")
-    activities = AgentExecutor(create_activities_agent(client), id="activities", context_mode="last_agent")
-    finalize = AgentExecutor(
-        Agent(
-            client=client, name="finalize_itinerary", instructions=FINALIZE_INSTRUCTIONS,
-            context_providers=[_build_skills_provider()],  # travel-guide PDF + response-guardrails
-            default_options={"store": False},
-        ),
-        id="finalize_itinerary", context_mode="last_agent",
-    )
-    gather, consolidate = GatherPreferences(), Consolidate()
-
-    return (
-        WorkflowBuilder(
-            name="travel_planning_workflow",
-            start_executor=gather,
-            checkpoint_storage=FileCheckpointStorage(
-                ".workshop-state/workflow-checkpoints",
-                allowed_checkpoint_types=["workflow:DraftPlan", "workflow:ApprovalRequest"],
-            ),
-            output_executors=[finalize],
-        )
-        .add_edge(gather, flights)
-        .add_edge(gather, hotels)
-        .add_edge(gather, activities)
-        .add_edge(flights, consolidate)
-        .add_edge(hotels, consolidate)
-        .add_edge(activities, consolidate)
-        .add_edge(consolidate, finalize)
-        .build()
-    )
-
-
-def build_workflow_agent(require_approval: bool = False) -> Agent:
-    return build_workflow(require_approval=require_approval).as_agent()
-```
-
-Do **not** copy the specialist prompts into `workflow.py` — import the factories so Steps 7 and 8 stay aligned.
-
-> **Skipped the Foundry skill?** The finalize step inherits the Step 7 rule: if you left `FOUNDRY_SKILL_NAMES` unset, carry your local-only skills provider here instead of the solution's `_build_skills_provider`, and drop the `response-guardrails` line from `FINALIZE_INSTRUCTIONS`. The local `travel-guide` skill still renders the PDF.
-
-### 3. Point `main.py` at the workflow
-
-`main.py` hosts the workflow-as-agent through the same server as every other step:
-
-```python
-# travel_assistant/main.py
-from agent_framework_foundry_hosting import ResponsesHostServer
-
-from workflow import build_workflow_agent
-
-
-def main() -> None:
-    agent = build_workflow_agent(require_approval=False)
-    ResponsesHostServer(agent).run()
-
-
-if __name__ == "__main__":
-    main()
-```
-
-### 4. Update the manifest
-
-Metadata-only: append the `Workflows` tag, update the `description`, and add a `workflow` block describing the graph. No new `template.environment_variables`; `resources` stays `[]`.
+In `agent.manifest.yaml`, append the `Memory` tag, add a memory `tool_declaration`, and mirror the two variables under `template.environment_variables`. `resources` stays `[]`:
 
 ```yaml
 # travel_assistant/agent.manifest.yaml (delta)
@@ -279,150 +214,132 @@ metadata:
     - Skills
     - Multi-Agent
     - Workflows
-  workflow:
-    start: gather_preferences
-    executors: [gather_preferences, flights, hotels, activities, consolidate, finalize_itinerary]
-    checkpointing: FileCheckpointStorage
-    human_in_the_loop: optional (approval_gate via request_info)
+    - Memory
+  tool_declarations:
+    - name: travelbuddy_memory
+      description: Durable, per-user memory backed by a Foundry Memory Store, scoped via {{$userId}}.
+      type: memory
+      memory_store_name: ${MEMORY_STORE_NAME}
+template:
+  environment_variables:
+    - name: AZURE_AI_EMBEDDING_MODEL_DEPLOYMENT_NAME
+      value: ${AZURE_AI_EMBEDDING_MODEL_DEPLOYMENT_NAME}
+    - name: MEMORY_STORE_NAME
+      value: ${MEMORY_STORE_NAME}
 ```
 
-### 5. (Optional) Add a human approval gate
-
-To pause for review before the itinerary is written, insert an `ApprovalGate` executor between `consolidate` and `finalize`. It uses `ctx.request_info()` to pause and a `@response_handler` to resume:
-
-```python
-# travel_assistant/workflow.py
-class ApprovalGate(Executor):
-    def __init__(self) -> None:
-        super().__init__(id="approval_gate")
-
-    @handler
-    async def request_approval(self, request: ApprovalRequest, ctx: WorkflowContext[str]) -> None:
-        await ctx.request_info(request_data=request, response_type=str)
-
-    @response_handler
-    async def on_approval(self, original_request: ApprovalRequest, feedback: str, ctx: WorkflowContext[AgentExecutorRequest]) -> None:
-        approved = feedback.strip().lower() in {"approve", "approved", "looks good", "finalise"}
-        prompt = _finalize_prompt(original_request.draft, "" if approved else feedback)
-        await ctx.send_message(
-            AgentExecutorRequest(messages=[Message(role="user", contents=[prompt])], should_respond=True),
-            target_id="finalize_itinerary",
-        )
-```
-
-The provided solution wires this in when you call `build_workflow(require_approval=True)`. Locally you drive it with a streaming loop:
-
-```python
-# travel_assistant/workflow.py
-stream = workflow.run(prompt, stream=True)
-while True:
-    pending = {}
-    async for event in stream:
-        if event.type == "request_info":
-            pending[event.request_id] = event.data
-        elif event.type == "output":
-            print(event.data)
-    if not pending:
-        break
-    responses = {rid: input("Approve or request changes: ") for rid in pending}
-    stream = workflow.run(stream=True, responses=responses)
-```
-
-When hosted, that `request_info` is surfaced to the caller as a **function call** instead — so keep `require_approval=False` for the default hosted run and use the local loop for an interactive approval demo.
+Add both variables to `.env` as well — `MEMORY_STORE_NAME` (keep it prefixed with `WORKSHOP_RESOURCE_PREFIX` so cleanup can find it) and `AZURE_AI_EMBEDDING_MODEL_DEPLOYMENT_NAME` (the name of your embedding deployment in Foundry).
 
 ## Run and deploy TravelBuddy
 
-`azd ai agent init` **copies** your `travel_assistant/` code into the generated `${WORKSHOP_RESOURCE_PREFIX}-travel-buddy/` project folder — that copy is the snapshot azd builds and deploys. You changed code in `travel_assistant/`, so **re-init** to refresh the snapshot. There are **no** new variables to `azd env set` (reuse the azd environment from earlier steps) and you do **not** run `azd provision` — you added no Azure resource (`resources:` is still `[]`).
+You changed code in `travel_assistant/`, so you must **re-init** to refresh the snapshot in `${WORKSHOP_RESOURCE_PREFIX}-travel-buddy/`. There are two new variables to set in the azd environment, and you do **not** run `azd provision` (the memory store was created out of band in step 1).
 
-1. **Re-init from the repository root.** Load your `.env` into the shell first so `WORKSHOP_RESOURCE_PREFIX` expands:
-
-   <!-- terminal -->
-   ```bash
-   # bash / zsh
-   set -a; source .env; set +a
-   azd ai agent init -m travel_assistant/agent.manifest.yaml \
-     --agent-name "${WORKSHOP_RESOURCE_PREFIX}-travel-buddy"
-   ```
-
-   <!-- terminal -->
-   ```powershell
-   # PowerShell
-   Get-Content .env | Where-Object { $_ -match '^\s*[^#].*=' } | ForEach-Object {
-     $name, $value = $_ -split '=', 2
-     Set-Item "Env:$($name.Trim())" $value.Trim().Trim('"').Trim("'")
-   }
-   azd ai agent init -m travel_assistant/agent.manifest.yaml `
-     --agent-name "$($env:WORKSHOP_RESOURCE_PREFIX)-travel-buddy"
-   ```
-
-2. **Run TravelBuddy locally** and invoke the workflow from a second terminal:
-
-   <!-- terminal -->
-   ```bash
-   # terminal 1 — from the project folder:
-   cd "${WORKSHOP_RESOURCE_PREFIX}-travel-buddy"
-   azd ai agent run
-   ```
-
-   <!-- terminal -->
-   ```bash
-   # terminal 2 — ask for a full trip plan:
-   azd ai agent invoke --local "Plan a 5-day Tokyo trip for two with a budget of €3000."
-   ```
-
-   A good trace shows `gather_preferences`, then `flights` / `hotels` / `activities` running together, then `consolidate`, then `finalize_itinerary`. Checkpoints appear under `.workshop-state/workflow-checkpoints/`.
-
-3. **Deploy to Foundry** and invoke the deployed agent:
-
-   <!-- terminal -->
-   ```bash
-   azd deploy
-   azd ai agent invoke "Plan a 5-day Tokyo trip for two with a budget of €3000."
-   ```
-
-   `azd deploy` builds the container image from the **refreshed** snapshot, pushes it, and rolls out a new hosted agent version. The whole workflow deploys **inside** the single container, so nothing else is needed — no role grant, no `azd provision`.
-
-## Try it
-
-- `Plan a 5-day Tokyo trip for two with a budget of €3000.` → all three specialists contribute before the itinerary is finalized.
-- `Reykjavik for a long weekend, mid-range hotel, one day trip.` → same graph, different inputs.
-- Inspect the newest checkpoint:
+Load your `.env` into the shell first:
 
 <!-- terminal -->
 ```bash
-python -c "from pathlib import Path; print('\n'.join(str(p) for p in Path('.workshop-state/workflow-checkpoints').glob('*')))"
+set -a; source .env; set +a
 ```
 
-Notice a checkpoint records workflow state, executor progress, and the resume point. Don't edit checkpoint files by hand.
+<!-- terminal -->
+```powershell
+Get-Content .env | Where-Object { $_ -match '=' -and $_ -notmatch '^\s*#' } | ForEach-Object {
+    $name, $value = $_ -split '=', 2
+    Set-Item -Path "Env:$($name.Trim())" -Value $value.Trim().Trim('"')
+}
+```
+
+Register the two new variables with azd (once):
+
+<!-- terminal -->
+```bash
+azd env set MEMORY_STORE_NAME "$MEMORY_STORE_NAME"
+azd env set AZURE_AI_EMBEDDING_MODEL_DEPLOYMENT_NAME "$AZURE_AI_EMBEDDING_MODEL_DEPLOYMENT_NAME"
+```
+
+Make sure the store exists before you run (safe to re-run):
+
+<!-- terminal -->
+```bash
+python travel_assistant/provision_memory_store.py
+```
+
+### Run locally
+
+<!-- terminal -->
+```bash
+azd ai agent init
+azd ai agent run
+azd ai agent invoke --local --message "I always fly out of SEA and prefer window seats on a mid-range budget."
+```
+
+### Deploy
+
+<!-- terminal -->
+```bash
+azd ai agent init
+azd deploy
+azd ai agent invoke --message "Plan a 4-day trip to Rome for me."
+```
+
+## Try it
+
+Prove memory survives across conversations. First, teach TravelBuddy a durable preference:
+
+<!-- terminal -->
+```bash
+azd ai agent invoke --message "Remember I'm vegetarian, I prefer trains over flights, and my home base is Lisbon."
+```
+
+Then, in a **new** invocation, ask for a plan and watch it apply what it remembers:
+
+<!-- terminal -->
+```bash
+azd ai agent invoke --message "Plan a long weekend in northern Spain."
+```
+
+Expect rail-first routing from Lisbon and vegetarian-friendly food suggestions. Ask `What do you remember about me?` and it should list the stored facts. Because the solution sets `update_delay=0`, writes land right away; if you removed that override the default 5-minute debounce applies and recall would lag behind the first call.
 
 ## Troubleshooting
 
-### Workflow doesn't checkpoint
+### Memories are never recalled
 
-Pass `checkpoint_storage=` to `WorkflowBuilder(...)`. `FileCheckpointStorage` requires an explicit path — there is no default directory. It also deserializes with a restricted unpickler: pass any application-defined types you persist via `allowed_checkpoint_types=["module:qualname", ...]` (here `workflow:DraftPlan` and `workflow:ApprovalRequest`) or a resume raises `Type '…' is not allowed`. For a distributed deployment, swap in `CosmosCheckpointStorage` from `agent-framework-azure-cosmos`.
+Recall is partitioned by scope. When hosted, the scope resolves from the authenticated caller, so invoke as the **same** signed-in identity both times. If you fork the code into a local script, use a single stable id — never a random UUID, timestamp, or session id, since each unique scope is an isolated partition.
 
-### Re-runs always start from scratch
+### `MemoryStoreNotFound` / store missing at runtime
 
-List checkpoints from the storage and resume by id — there is no `get_latest`:
+Re-run the provisioner and confirm `.env` uses the exact `MEMORY_STORE_NAME` it printed:
 
-```python
-# travel_assistant/workflow.py
-checkpoints = await storage.list_checkpoints(workflow_name=workflow.name)
-if checkpoints:
-    stream = workflow.run(checkpoint_id=checkpoints[-1].checkpoint_id, stream=True)
+<!-- terminal -->
+```bash
+python travel_assistant/provision_memory_store.py
 ```
 
-### Specialists run sequentially instead of together
+Watch for an unresolved placeholder like `{{MEMORY_STORE_NAME}}` in `.env` — it is passed straight through to the memory store and fails at runtime, so make sure the variable resolves to the real store name.
 
-Fan out **from the same parent** — three edges out of `gather_preferences`. If you chain `gather → flights → hotels → activities`, each waits for the previous one.
+### Provisioning fails with an embedding model error
 
-### Final itinerary appears before approval
+A memory store needs both a chat model and an embedding model deployment. Confirm `AZURE_AI_EMBEDDING_MODEL_DEPLOYMENT_NAME` names a real embedding deployment in your Foundry project, then re-run the provisioner.
 
-Confirm `finalize_itinerary` has an incoming edge only from `approval_gate` (when approval is enabled), not also from `consolidate`.
+### It remembers within one conversation but not across them
 
-### Approval never pauses when hosted
+That is chat history, not memory. Keep `default_options={"store": False}`, use separate invocations, and verify the same `MEMORY_STORE_NAME` and caller identity across both.
 
-Hosted workflow-agents surface `request_info` as a **function call**, not a prompt. For an interactive approval demo, run the local streaming loop with `responses=`; keep `require_approval=False` for the default `azd ai agent invoke` path.
+### Memory stores too much or too little
+
+Tune `user_profile_details` in `provision_memory_store.py` — keep it to travel preferences and exclude credentials, payment details, and precise location. Re-run the provisioner after editing (delete the store first if you need the new guidance to take effect).
+
+### Cleanup didn't remove the store
+
+`.workshop/scripts/cleanup.py --apply` only deletes the store when `MEMORY_STORE_NAME` starts with `WORKSHOP_RESOURCE_PREFIX`. Confirm the names line up:
+
+```dotenv
+# .env
+WORKSHOP_RESOURCE_PREFIX=foundry-workshop
+MEMORY_STORE_NAME=foundry-workshop-travelbuddy-memory
+```
+
+If cleanup lists it as skipped, the name has no prefix match — delete it manually in Foundry.
 
 ### Deploy didn't pick up my change
 
@@ -430,11 +347,11 @@ Hosted workflow-agents surface `request_info` as a **function call**, not a prom
 
 ## Solution
 
-> If you get stuck: [`.workshop/solutions/08-workflow/`](.workshop/solutions/08-workflow/)
+> If you get stuck: [`.workshop/solutions/09-memory/`](.workshop/solutions/09-memory/)
 
 ## Upstream sample
 
-> Adapted from the upstream [`05-workflows`](https://github.com/microsoft-foundry/foundry-samples/tree/main/samples/python/hosted-agents/agent-framework/responses/05-workflows) sample, which hosts a writer → legal → formatter workflow with `WorkflowBuilder(...).build().as_agent()`.
+> Adapted from the upstream [`13-foundry-memory`](https://github.com/microsoft-foundry/foundry-samples/tree/main/samples/python/hosted-agents/agent-framework/responses/13-foundry-memory) sample, which attaches a `FoundryMemoryProvider` (scoped by `{{$userId}}`) to a hosted agent and provisions the store with `provision_memory_store.py`.
 
 
 ---
@@ -444,13 +361,13 @@ Hosted workflow-agents surface `request_info` as a **function call**, not a prom
 
 ## ✅ Done with this step? Push to advance.
 
-**Next:** Step 09 — Memory (experimental)
+**Next:** Step 99 — Cleanup
 
-Commit the files you created or edited in this step and push them to `main`. The push automatically loads Step 09 — there is no button to click.
+Commit the files you created or edited in this step and push them to `main`. The push automatically loads Step 99 — there is no button to click.
 
 ```bash
 git add -A
-git commit -m "Complete step 8"
+git commit -m "Complete step 9"
 git push
 ```
 
@@ -458,7 +375,7 @@ After the **Advance workshop on push to main** Action finishes, run **`git pull`
 
 > Each push to `main` advances the workshop by exactly **one** step, so push once — when this step is done.
 
-> **Prefer to stay local?** Run `python .workshop/scripts/advance_step.py --expected-current-step 8 --auto-commit` (or `make advance`) instead. That advances locally and records it in the same commit, so your next push won't advance again. See [Working fully locally](.workshop/docs/steps/00-intro.md#5-working-fully-locally-no-github-actions).
+> **Prefer to stay local?** Run `python .workshop/scripts/advance_step.py --expected-current-step 9 --auto-commit` (or `make advance`) instead. That advances locally and records it in the same commit, so your next push won't advance again. See [Working fully locally](.workshop/docs/steps/00-intro.md#5-working-fully-locally-no-github-actions).
 
 <sub>Made a mistake on this step? Re-lay its clean starter files with the [Reset current step](https://github.com/ozgur1264-netizen/Ozgur-Workshop/actions/workflows/reset-current-step.yml) workflow, or run `python .workshop/scripts/advance_step.py --reset-current --auto-commit` locally — you stay on this step. To start the whole workshop over instead, use [Reset workshop](https://github.com/ozgur1264-netizen/Ozgur-Workshop/actions/workflows/reset-workshop.yml) or `python .workshop/scripts/advance_step.py --reset --auto-commit`.</sub>
 
