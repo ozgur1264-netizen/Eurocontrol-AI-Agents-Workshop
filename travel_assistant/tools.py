@@ -4,7 +4,6 @@ from zoneinfo import ZoneInfo
 
 from agent_framework import tool
 
-
 CITY_TIME_ZONES = {
     "lisbon": "Europe/Lisbon",
     "london": "Europe/London",
