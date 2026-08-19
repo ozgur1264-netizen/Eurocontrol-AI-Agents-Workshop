@@ -20,3 +20,5 @@ environment_variables:
     value: ${AZURE_AI_SEARCH_ENDPOINT}
   - name: AZURE_AI_SEARCH_INDEX_NAME
     value: ${AZURE_AI_SEARCH_INDEX_NAME}
+  - name: FOUNDRY_SKILL_NAMES
+    value: ${FOUNDRY_SKILL_NAMES}

@@ -10,10 +10,23 @@ name: travel-buddy
 description: >
   TravelBuddy is an Agent Framework hosted agent with local Python function tools
   for weather, local time, and currency, a Foundry Toolbox that bundles web search,
-  Code Interpreter, and the OctoTrip flights MCP server, and RAG grounding over a
-  curated destinations index in Azure AI Search.
+  Code Interpreter, and the OctoTrip flights MCP server, RAG grounding over a
+  destinations index in Azure AI Search, a local travel-guide Skill that renders a
+  downloadable PDF trip guide, and a Foundry response-guardrails Skill shared from
+  the project.
 metadata:
-  tags: [Agent Framework, AI Agent Hosting, Azure AI AgentServer, Responses Protocol, Travel Assistant, Function Tools, MCP Tools, Toolbox Tools, RAG]
+  tags:
+    - Agent Framework
+    - AI Agent Hosting
+    - Azure AI AgentServer
+    - Responses Protocol
+    - Travel Assistant
+    - Function Tools
+    - MCP Tools
+    - Toolbox Tools
+    - RAG
+    - Skills
+    - Foundry Skills
   tool_declarations:
     - name: get_weather
       description: Returns mock destination weather for a city and optional date.
@@ -42,6 +55,17 @@ metadata:
         top-k matching destination records into context before each turn.
       type: azure_ai_search
       endpoint: ${AZURE_AI_SEARCH_ENDPOINT}
+    - name: travel-guide
+      description: >
+        Local Skill that renders a grounded, downloadable PDF travel guide (with a
+        day-by-day itinerary) via scripts/create_travel_guide.py.
+      type: skill
+    - name: response-guardrails
+      description: >
+        Foundry Responsible-AI guardrails Skill downloaded from the project at
+        startup; shareable across agents and required by this step. Uploaded
+        out-of-band via foundry_skills/provision_skills.py.
+      type: skill
 template:
   name: travel-buddy
   kind: hosted
@@ -61,5 +85,7 @@ template:
       value: ${AZURE_AI_SEARCH_ENDPOINT}
     - name: AZURE_AI_SEARCH_INDEX_NAME
       value: ${AZURE_AI_SEARCH_INDEX_NAME}
+    - name: FOUNDRY_SKILL_NAMES
+      value: ${FOUNDRY_SKILL_NAMES}
 
 resources: []

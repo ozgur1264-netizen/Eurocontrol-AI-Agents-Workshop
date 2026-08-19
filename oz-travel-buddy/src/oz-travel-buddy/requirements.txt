@@ -8,3 +8,6 @@ debugpy
 # ---- RAG (Azure AI Search) ----
 agent-framework-azure-ai-search
 azure-search-documents
+
+# ---- Foundry skills (upload + runtime download) ----
+azure-ai-projects
