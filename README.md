@@ -2,10 +2,10 @@
 
 Built on the upstream [foundry-samples](https://github.com/microsoft-foundry/foundry-samples/tree/main/samples/python/hosted-agents/agent-framework/responses).
 
-> **Progress:** Step `09` of `9` — **Memory (experimental)**  
+> **Progress:** Step `99` of `99` — **Cleanup**  
 > ▰▰▰▰▰▰▰▰▰▰
 
-<!-- step: 09 -->
+<!-- step: 99 -->
 
 <details>
 <summary>Workshop map</summary>
@@ -19,364 +19,263 @@ Built on the upstream [foundry-samples](https://github.com/microsoft-foundry/fou
 - Step 06 — Skills ✅
 - Step 07 — Multi-agent ✅
 - Step 08 — Workflow (experimental) ✅
-- **Step 09 — Memory (experimental)**
-- Step 99 — Cleanup
+- Step 09 — Memory (experimental) ✅
+- **Step 99 — Cleanup**
 
 </details>
 
 If something looks broken see [Troubleshooting](.workshop/docs/steps/00-intro.md#troubleshooting).
 
 
-# Step 9 — Durable per-user memory
+# 🎉 You did it
 
-> 🧪 **Experimental** — this step has not been fully tested yet. Treat it as a preview and expect rough edges.
+Congratulations — you built **TravelBuddy** from a single hosted agent into a
+multi-agent, workflow-orchestrated, memory-bearing travel assistant grounded in
+your own data.
 
-> **Goal:** give TravelBuddy a persistent, per-user memory backed by a Foundry **Memory Store**, so it recalls stable traveler preferences across separate conversations — while keeping the whole Step 8 workflow intact.
+You started with a simple chat loop.
 
-## What you'll learn
+You ended with an assistant that can use tools, consult documentation, analyze
+files, retrieve destination knowledge, delegate to specialists, run a durable
+workflow, pause for approval, and remember traveler preferences over time.
 
-- What a Foundry **Memory Store** is, and how it differs from chat history and from RAG
-- How `FoundryMemoryProvider` extracts durable facts and injects relevant memories into agent context
-- How memory is **scoped per user** with the `{{$userId}}` hosting placeholder
-- How to add memory as one more `context_provider` without touching the workflow graph
+That is a lot of ground to cover.
 
-## What's already in the repo
+Take a breath.
 
-- Everything from Steps 1–8 in `travel_assistant/` — the durable workflow, specialists, tools, toolbox, RAG, and skill.
-- `travel_assistant/coordinator.py` — the Step 8 specialist factories (`make_client`, `create_flights_agent`, `create_hotels_agent`, `create_activities_agent`). This step adds memory there so every specialist gains it from one place.
-- `travel_toolbox/toolbox.yaml` — unchanged.
+Then clean up the cloud resources you created.
 
-This step adds `provision_memory_store.py`, a small delta on `coordinator.py`, two new environment variables, and a `Memory` tag. `main.py` and `workflow.py` are **unchanged**, and there are **no** new Azure resources in the manifest.
+## Recap: the journey
 
-## Concept (5-min read)
+| Step | What TravelBuddy gained |
+| --- | --- |
+| Step 1 | A first hosted agent named **TravelBuddy**. |
+| Step 2 | Function tools for weather, local time, and currency conversion. |
+| Step 3 | MCP live flight search with OctoTrip Flights. |
+| Step 4 | Foundry Toolbox capabilities: CSV analysis with Code Interpreter, plus web search. |
+| Step 5 | Retrieval-augmented generation over a destinations index. |
+| Step 6 | A local travel-guide skill (colorful PDF trip guides) plus a required Foundry skill for shared, Responsible-AI response guardrails. |
+| Step 7 | A multi-agent runtime group chat between a Coordinator manager and specialist agents. |
+| Step 8 | A durable workflow with checkpoints and an approval gate. |
+| Step 9 | Long-term memory for traveler preferences across sessions. |
 
-A conversation already has **in-conversation context** — the messages still in the current chat history. That is enough for follow-up questions, but it is not durable: when the conversation ends or history is trimmed, it is gone. **Memory** is the durable layer. TravelBuddy writes stable facts about *you* — home airport, cabin class, budget band, dietary needs, favourite destinations — into a Foundry **Memory Store**, and on a later conversation the memory provider retrieves the relevant ones and injects them into the model context before the agent answers.
+Along the way, you practiced a pattern that applies far beyond travel:
 
-**Memory is not RAG.** RAG (Step 5) retrieves knowledge about the *world* — destination documents shared by everyone. Memory retrieves personal facts about the *current user*. In this workshop the destination index says what TravelBuddy knows about *places*; the memory store says what TravelBuddy knows about *you*.
+- Start with one clear assistant persona.
+- Add tools when the model needs to act.
+- Add grounding when the model needs trusted knowledge.
+- Add file and code tools when the model needs to inspect user data.
+- Add retrieval when the assistant needs a private knowledge base.
+- Add skills when behavior should be packaged and reused.
+- Add multiple agents when specialist roles make the system easier to reason about.
+- Add workflows when the process must be observable, repeatable, or approval-driven.
+- Add memory when the assistant should improve across sessions.
 
-**How it works.** `FoundryMemoryProvider` is a `context_provider`, exactly like `AzureAISearchContextProvider` (RAG) and `SkillsProvider` (skills). On each turn it does two things: it **retrieves** memories relevant to the request and adds them to context, and it **extracts** new durable facts from the exchange and writes them to the store. The extraction/consolidation is handled server-side by the memory store using the chat and embedding models you configure when you provision it — that is why an **embedding model deployment** is a prerequisite.
+That progression is the heart of the workshop.
 
-**Scope is the key design detail.** Memories are partitioned by a scope string. Store under one scope and read under another and recall silently fails. For a hosted agent the correct scope is the special placeholder `scope="{{$userId}}"`, which the hosting runtime replaces with the authenticated caller's user id — so every traveler automatically gets their own isolated memories. (In a purely local script you would instead pass a stable id you control.)
-
-**Where memory attaches.** We add the provider inside the Step 8 specialist factories, so the workflow's `flights` / `hotels` / `activities` executors all become memory-aware. The `finalize_itinerary` step is deliberately left out: the specialists already fold each traveler's recalled preferences into the draft, so finalize only has to render and guardrail the consolidated answer — it needs the skills, not per-user recall. The graph, checkpoints, hosting, and `workflow.as_agent()` are untouched — memory rides along as context.
-
-```mermaid
-flowchart LR
-    A[Conversation] --> B[Specialist turn]
-    B --> C[Extract durable facts]
-    C --> D[(Foundry Memory Store)]
-    D -.recall.-> E[Later conversation]
-    E --> F[Inject user-scoped memories]
-    F --> G[Personalized itinerary]
-```
-
-**Learn more**
-
-- [What is memory in Foundry Agents](https://learn.microsoft.com/azure/foundry/agents/concepts/what-is-memory)
-- [Use memory with agents](https://learn.microsoft.com/azure/foundry/agents/how-to/memory-usage)
-- [Quickstart: memory for a hosted agent](https://learn.microsoft.com/azure/foundry/agents/quickstarts/quickstart-memory-hosted-agent)
-- [Agent Framework — get started with memory](https://learn.microsoft.com/agent-framework/get-started/memory)
-
-## Steps
-
-### 1. Provision the memory store (out of band)
-
-A memory store is a Foundry primitive, not an Azure resource you declare in the manifest — so you create it once with a helper script, the same way you provisioned the Search index in Step 5. Create `travel_assistant/provision_memory_store.py`. It reads your `.env`, creates the store named by `MEMORY_STORE_NAME` if it does not already exist, and is safe to re-run.
-
-```python
-# travel_assistant/provision_memory_store.py
-from azure.ai.projects.aio import AIProjectClient
-from azure.ai.projects.models import MemoryStoreDefaultDefinition, MemoryStoreDefaultOptions
-from azure.core.exceptions import ResourceNotFoundError
-from azure.identity.aio import DefaultAzureCredential
-
-async def main() -> None:
-    endpoint = required_env("AZURE_AI_PROJECT_ENDPOINT")
-    memory_store_name = required_env("MEMORY_STORE_NAME")
-    chat_model = required_env("AZURE_AI_MODEL_DEPLOYMENT_NAME")
-    embedding_model = required_env("AZURE_AI_EMBEDDING_MODEL_DEPLOYMENT_NAME")
-
-    async with (
-        DefaultAzureCredential() as credential,
-        AIProjectClient(endpoint=endpoint, credential=credential, allow_preview=True) as project,
-    ):
-        try:
-            existing = await project.beta.memory_stores.get(name=memory_store_name)
-            print(f"Memory store '{existing.name}' already exists; leaving as-is.")
-            return
-        except ResourceNotFoundError:
-            pass
-        definition = MemoryStoreDefaultDefinition(
-            chat_model=chat_model,
-            embedding_model=embedding_model,
-            options=MemoryStoreDefaultOptions(
-                chat_summary_enabled=False,
-                user_profile_enabled=True,
-                user_profile_details="Capture durable travel preferences; avoid sensitive data.",
-            ),
-        )
-        await project.beta.memory_stores.create(name=memory_store_name, definition=definition,
-            description="Memory store for TravelBuddy")
-```
-
-The store needs two model deployments: your existing **chat** model and an **embedding** model (used to index memories for semantic recall). `user_profile_enabled=True` turns on durable per-user facts; `chat_summary_enabled=False` keeps the demo focused on preferences. The `memory_stores` API is preview, so the client is created with `allow_preview=True`.
-
-Run it from the solution's `travel_assistant/` directory, after loading `.env`:
-
-<!-- terminal -->
-```bash
-python provision_memory_store.py
-```
-
-First run creates and verifies the store; re-runs report it already exists.
-
-### 2. Add memory to the specialist factories
-
-Two small changes let every specialist share one memory provider. First, `make_client` opts into the preview API so the underlying project client can reach `beta.memory_stores`:
-
-```python
-# travel_assistant/coordinator.py (delta)
-from agent_framework.foundry import FoundryChatClient, FoundryMemoryProvider  # add FoundryMemoryProvider
-
-def make_client(credential=None) -> FoundryChatClient:
-    return FoundryChatClient(
-        project_endpoint=os.environ["AZURE_AI_PROJECT_ENDPOINT"],
-        model=os.environ["AZURE_AI_MODEL_DEPLOYMENT_NAME"],
-        credential=credential or DefaultAzureCredential(),
-        allow_preview=True,  # NEW: needed for client.project_client -> beta.memory_stores
-    )
-```
-
-Then add a builder that reuses the chat client's `project_client`, and append it to each specialist's `context_providers`:
-
-```python
-# travel_assistant/coordinator.py (delta)
-def _build_memory_provider(client: FoundryChatClient) -> FoundryMemoryProvider:
-    memory_store_name = os.environ["MEMORY_STORE_NAME"]
-    return FoundryMemoryProvider(
-        project_client=client.project_client,
-        memory_store_name=memory_store_name,
-        scope="{{$userId}}",  # hosting replaces this with the caller's user id
-        update_delay=0,        # write memories immediately (default is 300s / 5 min)
-    )
-```
-
-`update_delay` is the debounce before the store extracts and persists new facts. It **defaults to 300 seconds (5 minutes)**, which batches writes to reduce cost in production. For the workshop we set `update_delay=0` so a fact you state in one turn is recallable on the next; leave the default (or raise it) in a real deployment.
-
-Each factory builds the provider from its `client` and appends it — keeping every carried-over tool, toolbox, and RAG:
-
-```python
-# travel_assistant/coordinator.py (delta)
-def create_hotels_agent(client, credential=None) -> Agent:
-    credential = credential or DefaultAzureCredential()
-    toolbox = FoundryToolbox(credential)
-    search = _build_search_provider(credential)
-    memory = _build_memory_provider(client)                       # NEW
-    return Agent(
-        client=client, name="HotelsSpecialist", instructions=HOTELS_INSTRUCTIONS,
-        tools=[convert_currency, toolbox],
-        context_providers=[search, memory],  # + memory
-        default_options={"store": False},
-    )
-```
-
-`create_flights_agent` gains `context_providers=[memory]` (its first provider); `create_activities_agent` becomes `[search, memory]`. Reading `MEMORY_STORE_NAME` with `os.environ["..."]` makes memory a required capability — a missing value fails fast with a clear `KeyError` instead of silently starting without recall.
-
-Reusing `client.project_client` (instead of constructing a second `AIProjectClient`) keeps a single authentication context, and putting memory in the factories means the runtime Coordinator (Step 7) and the hosted workflow (Step 8) both pick it up from one source of truth. `main.py` and `workflow.py` need **no** changes.
-
-### 3. Declare the new configuration
-
-Add the two new variables so local tooling and the hosted container both receive them. In `agent.yaml`, append to `environment_variables`:
-
-```yaml
-# travel_assistant/agent.yaml (delta)
-  - name: AZURE_AI_EMBEDDING_MODEL_DEPLOYMENT_NAME
-    value: ${AZURE_AI_EMBEDDING_MODEL_DEPLOYMENT_NAME}
-  - name: MEMORY_STORE_NAME
-    value: ${MEMORY_STORE_NAME}
-```
-
-In `agent.manifest.yaml`, append the `Memory` tag, add a memory `tool_declaration`, and mirror the two variables under `template.environment_variables`. `resources` stays `[]`:
-
-```yaml
-# travel_assistant/agent.manifest.yaml (delta)
-metadata:
-  tags:
-    - Agent Framework
-    - AI Agent Hosting
-    - Azure AI AgentServer
-    - Responses Protocol
-    - Travel Assistant
-    - Function Tools
-    - MCP Tools
-    - Toolbox Tools
-    - RAG
-    - Skills
-    - Multi-Agent
-    - Workflows
-    - Memory
-  tool_declarations:
-    - name: travelbuddy_memory
-      description: Durable, per-user memory backed by a Foundry Memory Store, scoped via {{$userId}}.
-      type: memory
-      memory_store_name: ${MEMORY_STORE_NAME}
-template:
-  environment_variables:
-    - name: AZURE_AI_EMBEDDING_MODEL_DEPLOYMENT_NAME
-      value: ${AZURE_AI_EMBEDDING_MODEL_DEPLOYMENT_NAME}
-    - name: MEMORY_STORE_NAME
-      value: ${MEMORY_STORE_NAME}
-```
+## Where to take it next
 
-Add both variables to `.env` as well — `MEMORY_STORE_NAME` (keep it prefixed with `WORKSHOP_RESOURCE_PREFIX` so cleanup can find it) and `AZURE_AI_EMBEDDING_MODEL_DEPLOYMENT_NAME` (the name of your embedding deployment in Foundry).
+You now have a working foundation.
 
-## Run and deploy TravelBuddy
+Here are a few useful next experiments.
 
-You changed code in `travel_assistant/`, so you must **re-init** to refresh the snapshot in `${WORKSHOP_RESOURCE_PREFIX}-travel-buddy/`. There are two new variables to set in the azd environment, and you do **not** run `azd provision` (the memory store was created out of band in step 1).
+### Replace a mock tool with a real API
 
-Load your `.env` into the shell first:
+The weather, time, and currency tools were intentionally small so the workshop
+could stay focused on the agent architecture.
 
-<!-- terminal -->
-```bash
-set -a; source .env; set +a
-```
+Try swapping one mock for a production API.
 
-<!-- terminal -->
-```powershell
-Get-Content .env | Where-Object { $_ -match '=' -and $_ -notmatch '^\s*#' } | ForEach-Object {
-    $name, $value = $_ -split '=', 2
-    Set-Item -Path "Env:$($name.Trim())" -Value $value.Trim().Trim('"')
-}
-```
+For example:
 
-Register the two new variables with azd (once):
+- Connect `get_weather` to a real weather provider.
+- Connect `convert_currency` to a live exchange-rate service.
+- Add rate limits, retries, and friendly error handling.
+- Log tool inputs and outputs so you can debug real-world failures.
 
-<!-- terminal -->
-```bash
-azd env set MEMORY_STORE_NAME "$MEMORY_STORE_NAME"
-azd env set AZURE_AI_EMBEDDING_MODEL_DEPLOYMENT_NAME "$AZURE_AI_EMBEDDING_MODEL_DEPLOYMENT_NAME"
-```
+That is often the first step from workshop code to a usable assistant.
 
-Make sure the store exists before you run (safe to re-run):
+### Add evaluation runs
 
-<!-- terminal -->
-```bash
-python travel_assistant/provision_memory_store.py
-```
+Create a small set of travel scenarios and evaluate TravelBuddy against them.
 
-### Run locally
+Good evaluation prompts might include:
 
-<!-- terminal -->
-```bash
-azd ai agent init
-azd ai agent run
-azd ai agent invoke --local --message "I always fly out of SEA and prefer window seats on a mid-range budget."
-```
+- A family trip with budget constraints.
+- A business trip with tight arrival windows.
+- A traveler with accessibility requirements.
+- A trip that should trigger an approval gate.
+- A returning user whose saved preferences should be remembered.
 
-### Deploy
+Use the Azure AI Foundry evaluation tooling to measure quality, groundedness,
+relevance, tool use, and regressions over time:
 
-<!-- terminal -->
-```bash
-azd ai agent init
-azd deploy
-azd ai agent invoke --message "Plan a 4-day trip to Rome for me."
-```
+- [Evaluate with Azure AI Foundry](https://learn.microsoft.com/azure/ai-foundry/how-to/develop/evaluate-sdk)
 
-## Try it
+Treat evaluation as part of the application, not as an afterthought.
 
-Prove memory survives across conversations. First, teach TravelBuddy a durable preference:
+### Deploy to a chat surface
 
-<!-- terminal -->
-```bash
-azd ai agent invoke --message "Remember I'm vegetarian, I prefer trains over flights, and my home base is Lisbon."
-```
+A command-line assistant is great for learning.
 
-Then, in a **new** invocation, ask for a plan and watch it apply what it remembers:
+A real assistant usually lives where users already work.
 
-<!-- terminal -->
-```bash
-azd ai agent invoke --message "Plan a long weekend in northern Spain."
-```
+Possible next surfaces include:
 
-Expect rail-first routing from Lisbon and vegetarian-friendly food suggestions. Ask `What do you remember about me?` and it should list the stored facts. Because the solution sets `update_delay=0`, writes land right away; if you removed that override the default 5-minute debounce applies and recall would lag behind the first call.
+- A Teams app.
+- A web chat embed.
+- An internal support portal.
+- A workflow-triggered assistant in an operations dashboard.
 
-## Troubleshooting
+Useful starting points:
 
-### Memories are never recalled
+- [Microsoft Teams AI samples](https://github.com/microsoft/teams-ai)
+- [Microsoft Foundry samples](https://github.com/microsoft-foundry/foundry-samples)
 
-Recall is partitioned by scope. When hosted, the scope resolves from the authenticated caller, so invoke as the **same** signed-in identity both times. If you fork the code into a local script, use a single stable id — never a random UUID, timestamp, or session id, since each unique scope is an isolated partition.
+When you move to a chat surface, keep the same boundaries you practiced here:
 
-### `MemoryStoreNotFound` / store missing at runtime
+- Keep secrets out of source control.
+- Keep tool behavior explicit.
+- Keep approval gates visible.
+- Keep telemetry and evaluation in the loop.
+- Keep cleanup scripts ready for temporary environments.
 
-Re-run the provisioner and confirm `.env` uses the exact `MEMORY_STORE_NAME` it printed:
+### Try a different domain
 
-<!-- terminal -->
-```bash
-python travel_assistant/provision_memory_store.py
-```
+Replace **travel** with your own scenario.
 
-Watch for an unresolved placeholder like `{{MEMORY_STORE_NAME}}` in `.env` — it is passed straight through to the memory store and fails at runtime, so make sure the variable resolves to the real store name.
+The bones generalize.
 
-### Provisioning fails with an embedding model error
+For example:
 
-A memory store needs both a chat model and an embedding model deployment. Confirm `AZURE_AI_EMBEDDING_MODEL_DEPLOYMENT_NAME` names a real embedding deployment in your Foundry project, then re-run the provisioner.
+- Travel itinerary planning becomes sales account planning.
+- Destination retrieval becomes product documentation retrieval.
+- Weather and currency tools become inventory and pricing tools.
+- The travel-guide skill becomes a proposal-generation skill.
+- The Coordinator and specialists become planner, researcher, reviewer, and writer agents.
+- The approval gate becomes legal, finance, or manager review.
+- Traveler memory becomes customer, employee, or project preference memory.
 
-### It remembers within one conversation but not across them
+The important part is not the travel theme.
 
-That is chat history, not memory. Keep `default_options={"store": False}`, use separate invocations, and verify the same `MEMORY_STORE_NAME` and caller identity across both.
+The important part is the shape of the system.
 
-### Memory stores too much or too little
+## 🚨 Cleanup: do this before you walk away
 
-Tune `user_profile_details` in `provision_memory_store.py` — keep it to travel preferences and exclude credentials, payment details, and precise location. Re-run the provisioner after editing (delete the store first if you need the new guidance to take effect).
+Workshop resources can cost money if you leave them running. TravelBuddy's
+resources come from two places, and a complete teardown covers both:
 
-### Cleanup didn't remove the store
+1. **azd-provisioned hosting** — the hosted-agent container app and anything
+   `azd` created. Remove these with `azd down`.
+2. **Out-of-band Foundry resources** — the **Toolbox** (Step 4), the **Azure AI
+   Search index** (Step 5), and the **Memory Store** (Step 9) were created by
+   helper scripts, not by `azd provision`, so `azd down` does **not** remove
+   them. Use `.workshop/scripts/cleanup.py` for those.
 
-`.workshop/scripts/cleanup.py --apply` only deletes the store when `MEMORY_STORE_NAME` starts with `WORKSHOP_RESOURCE_PREFIX`. Confirm the names line up:
+Checklist:
 
-```dotenv
-# .env
-WORKSHOP_RESOURCE_PREFIX=foundry-workshop
-MEMORY_STORE_NAME=foundry-workshop-travelbuddy-memory
-```
+- [ ] Tear down the azd-provisioned hosting in one shot:
 
-If cleanup lists it as skipped, the name has no prefix match — delete it manually in Foundry.
+  <!-- terminal -->
+  ```bash
+  azd down --force --purge
+  ```
 
-### Deploy didn't pick up my change
+- [ ] Dry-run the out-of-band cleanup and confirm it only lists resources
+  prefixed with `WORKSHOP_RESOURCE_PREFIX`:
 
-`azd ai agent init` **copied** your code into `${WORKSHOP_RESOURCE_PREFIX}-travel-buddy/`. Re-run `azd ai agent init`, then `azd deploy` again.
+  <!-- terminal -->
+  ```bash
+  python .workshop/scripts/cleanup.py
+  ```
 
-## Solution
+- [ ] Delete the listed out-of-band resources (toolbox, Search index, memory store):
 
-> If you get stuck: [`.workshop/solutions/09-memory/`](.workshop/solutions/09-memory/)
+  <!-- terminal -->
+  ```bash
+  python .workshop/scripts/cleanup.py --apply
+  ```
 
-## Upstream sample
+  Or skip the confirmation prompt:
 
-> Adapted from the upstream [`13-foundry-memory`](https://github.com/microsoft-foundry/foundry-samples/tree/main/samples/python/hosted-agents/agent-framework/responses/13-foundry-memory) sample, which attaches a `FoundryMemoryProvider` (scoped by `{{$userId}}`) to a hosted agent and provisions the store with `provision_memory_store.py`.
+  <!-- terminal -->
+  ```bash
+  python .workshop/scripts/cleanup.py --apply --yes
+  ```
 
+- [ ] Deactivate and remove your local Python virtual environment:
 
----
+  <!-- terminal -->
+  ```bash
+  deactivate              # exit the venv if it is still active
+  rm -rf .venv            # macOS / Linux
+  ```
 
-<!-- workshop-footer: push-to-advance -->
-<a id="advance"></a>
+  Or, on Windows (PowerShell):
 
-## ✅ Done with this step? Push to advance.
+  <!-- terminal -->
+  ```powershell
+  deactivate              # only if a venv is currently active
+  Remove-Item -Recurse -Force .venv
+  ```
 
-**Next:** Step 99 — Cleanup
+- [ ] Optional: delete this repository if you do not want to keep your workshop copy.
 
-Commit the files you created or edited in this step and push them to `main`. The push automatically loads Step 99 — there is no button to click.
+> ⚠️ `cleanup.py` only touches resources whose names match your
+> `WORKSHOP_RESOURCE_PREFIX`. That is why Steps 5 and 9 asked you to keep the
+> Search index and `MEMORY_STORE_NAME` prefixed. Anything you renamed manually
+> will not be cleaned up by the script — list those in the Azure portal and
+> delete them by hand.
 
-```bash
-git add -A
-git commit -m "Complete step 9"
-git push
-```
+Before running `--apply`, double-check:
 
-After the **Advance workshop on push to main** Action finishes, run **`git pull`** to refresh your `README.md` and the next step's files. If you're reading on GitHub, refresh the page.
+- The active Azure subscription is the one you used for the workshop.
+- Your `.env` still contains the correct `WORKSHOP_RESOURCE_PREFIX`.
+- The dry run output does not include resources you want to keep.
+- Any manually renamed resources are recorded somewhere so you can remove them.
 
-> Each push to `main` advances the workshop by exactly **one** step, so push once — when this step is done.
+After cleanup, it is a good idea to open the Azure portal and verify that the
+resource group or individual workshop resources are gone.
 
-> **Prefer to stay local?** Run `python .workshop/scripts/advance_step.py --expected-current-step 9 --auto-commit` (or `make advance`) instead. That advances locally and records it in the same commit, so your next push won't advance again. See [Working fully locally](.workshop/docs/steps/00-intro.md#5-working-fully-locally-no-github-actions).
+## Feedback
 
-<sub>Made a mistake on this step? Re-lay its clean starter files with the [Reset current step](https://github.com/ozgur1264-netizen/Ozgur-Workshop/actions/workflows/reset-current-step.yml) workflow, or run `python .workshop/scripts/advance_step.py --reset-current --auto-commit` locally — you stay on this step. To start the whole workshop over instead, use [Reset workshop](https://github.com/ozgur1264-netizen/Ozgur-Workshop/actions/workflows/reset-workshop.yml) or `python .workshop/scripts/advance_step.py --reset --auto-commit`.</sub>
+> Please open an issue with the
+> [workshop-feedback template](https://github.com/Azure-Samples/foundry-hosted-agents-workshop/issues/new?template=workshop-feedback.md) —
+> what was confusing, what was great, what would you change?
 
-<sub>Advanced too far? Use the [Go back one step](https://github.com/ozgur1264-netizen/Ozgur-Workshop/actions/workflows/back-workshop.yml) workflow, or run `python .workshop/scripts/advance_step.py --back --auto-commit` locally.</sub>
+Helpful feedback includes:
+
+- Which step took the longest?
+- Which concept clicked immediately?
+- Which concept needed more explanation?
+- Did any command fail on your machine?
+- Were the troubleshooting notes enough?
+- What would make this better for the next participant?
+
+## Credits
+
+- Built on top of the upstream
+  [foundry-samples](https://github.com/microsoft-foundry/foundry-samples) —
+  thanks to that team.
+
+Thank you for spending time with the workshop.
+
+Thank you for helping make agent development more approachable.
+
+## Reset
+
+> Want to redo the workshop? Run the **Reset workshop** GitHub Action
+> (Actions tab → Reset workshop → Run workflow), **or** run it locally with
+> `python .workshop/scripts/advance_step.py --reset --auto-commit` (or `make reset`).
+> Either way, you'll be back at step 0.
+
+If you reset, the repository returns to the beginning of the guided flow.
+
+That is useful when you want to:
+
+- Run the workshop again from a clean state.
+- Demo the workshop to someone else.
+- Validate that the steps still work after template changes.
+- Compare your completed app with the reference solutions.
+
+Have fun building the next assistant.
